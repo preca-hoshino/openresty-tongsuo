@@ -123,7 +123,7 @@ jobs:
           build-args: |
             RESTY_OPENSSL_VERSION=${{ env.TONGSUO_VERSION }}
             RESTY_VERSION=${{ env.OPENRESTY_VERSION }}
-            RESTY_J=$(nproc)
+            RESTY_J=4
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
@@ -140,7 +140,7 @@ jobs:
           build-args: |
             RESTY_OPENSSL_VERSION=${{ env.TONGSUO_VERSION }}
             RESTY_VERSION=${{ env.OPENRESTY_VERSION }}
-            RESTY_J=$(nproc)
+            RESTY_J=4
           # GitHub Actions cache for faster rebuilds
           cache-from: type=gha
           cache-to: type=gha,mode=max

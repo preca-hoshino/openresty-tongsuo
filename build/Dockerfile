@@ -22,8 +22,7 @@ ARG RESTY_OPENSSL_URL_BASE="https://github.com/Tongsuo-Project/Tongsuo/archive/r
 # Tongsuo 8.4+ removed: Camellia, SEED, RC5, MD2, MD4, MDC2, IDEA, Blowfish, CAST, RIPEMD
 # Tongsuo 8.5+ (OpenSSL 3.5.x): enable-ssl3/enable-ssl3-method removed from OpenSSL 3.x
 # enable-ntls: 国密 TLCP/NTLS support
-# Start with minimal options; add more as verified
-ARG RESTY_OPENSSL_BUILD_OPTIONS="enable-ntls"
+ARG RESTY_OPENSSL_BUILD_OPTIONS="enable-ntls enable-cms enable-ktls"
 
 # https://github.com/openresty/openresty-packaging/blob/master/deb/openresty-pcre2/debian/rules
 ARG RESTY_PCRE_VERSION="10.47"
@@ -142,28 +141,22 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
     && if [ -n "${RESTY_EVAL_PRE_CONFIGURE}" ]; then eval $(echo ${RESTY_EVAL_PRE_CONFIGURE}); fi
 
 # ===== Stage 2: Download and build Tongsuo (铜锁) =====
-RUN set -ex \
-    && echo '=== Downloading and building Tongsuo (铜锁) ===' \
+RUN echo '=== Downloading and building Tongsuo (铜锁) ===' \
     && cd /tmp \
     && curl -fSL "${RESTY_OPENSSL_URL_BASE}/${RESTY_OPENSSL_VERSION}.tar.gz" \
          -o tongsuo-${RESTY_OPENSSL_VERSION}.tar.gz \
-    && ls -la tongsuo-${RESTY_OPENSSL_VERSION}.tar.gz \
     && tar xzf tongsuo-${RESTY_OPENSSL_VERSION}.tar.gz \
-    && ls -d Tongsuo-* \
     && mv Tongsuo-${RESTY_OPENSSL_VERSION} openssl-${RESTY_OPENSSL_VERSION} \
     && cd openssl-${RESTY_OPENSSL_VERSION} \
-    && echo '=== Configuring Tongsuo ===' \
+    && echo 'Tongsuo (铜锁) — no OpenSSL patch needed (async session lookup built-in)' \
     && ./config \
-      shared zlib -g \
+      shared zlib \
       --prefix=/usr/local/openresty/openssl3 \
       --libdir=lib \
       -Wl,-rpath,/usr/local/openresty/openssl3/lib \
       ${RESTY_OPENSSL_BUILD_OPTIONS} \
-    && echo '=== Building Tongsuo ===' \
     && make -j${RESTY_J} \
-    && echo '=== Installing Tongsuo ===' \
     && make -j${RESTY_J} install_sw \
-    && echo '=== Cleaning up Tongsuo sources ===' \
     && rm -f /tmp/tongsuo-${RESTY_OPENSSL_VERSION}.tar.gz \
     && rm -rf /tmp/openssl-${RESTY_OPENSSL_VERSION}
 
