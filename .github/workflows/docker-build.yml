@@ -233,7 +233,7 @@ jobs:
 # ═══════════════════════════════════════════════════════════════════
   verify:
     name: "✅ 验证 — 拉取测试"
-    needs: push
+    needs: [prepare, push]
     if: |
       github.event_name != 'pull_request' &&
       (github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry != 'false')
