@@ -1,0 +1,21 @@
+# .dockerignore — Exclude unnecessary files from Docker build context
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# GitHub
+.github
+
+# Original reference files
+original-*
+
+# Documentation
+*.md
+!build/**/*.md
+
+# IDE
+.vscode
+.idea
+*.swp

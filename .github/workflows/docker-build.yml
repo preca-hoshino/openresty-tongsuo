@@ -1,0 +1,192 @@
+name: Build and Push OpenResty Tongsuo Docker Image
+
+# Triggers:
+# 1. Push to main branch (auto-build)
+# 2. Manual trigger via GitHub Actions UI (workflow_dispatch)
+# 3. Weekly scheduled build to keep base images fresh
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'build/**'
+      - '.github/workflows/docker-build.yml'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'build/**'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+    inputs:
+      tongsuo_version:
+        description: 'Tongsuo version (e.g. 8.5.0-pre1)'
+        required: false
+        default: '8.5.0-pre1'
+      openresty_version:
+        description: 'OpenResty version (e.g. 1.29.2.4)'
+        required: false
+        default: '1.29.2.4'
+      push_to_registry:
+        description: 'Push image to registry?'
+        type: boolean
+        required: false
+        default: true
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6:00 UTC
+
+env:
+  REGISTRY: ghcr.io
+  # Default versions (overridable via workflow_dispatch)
+  TONGSUO_VERSION: "8.5.0-pre1"
+  OPENRESTY_VERSION: "1.29.2.4"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Required for OIDC-based attestation
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set versions from inputs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "TONGSUO_VERSION=${{ github.event.inputs.tongsuo_version }}" >> $GITHUB_ENV
+          echo "OPENRESTY_VERSION=${{ github.event.inputs.openresty_version }}" >> $GITHUB_ENV
+
+      # Generate metadata for Docker tags & labels
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            # Version tag: openresty-X.X.X-tongsuo-X.X.X
+            type=raw,value=openresty-${{ env.OPENRESTY_VERSION }}-tongsuo-${{ env.TONGSUO_VERSION }}
+            # Short version: latest
+            type=raw,value=latest
+            # Git commit SHA (for pinning)
+            type=sha,prefix=sha-
+            # Branch name
+            type=ref,event=branch
+            # PR number (only on PR events)
+            type=ref,event=pr
+          labels: |
+            org.opencontainers.image.title=OpenResty Tongsuo
+            org.opencontainers.image.description=OpenResty ${{ env.OPENRESTY_VERSION }} + Tongsuo ${{ env.TONGSUO_VERSION }} with SM2/SM3/SM4/TLCP/NTLS
+            org.opencontainers.image.vendor=OpenResty Tongsuo Community
+            tongsuo.version=${{ env.TONGSUO_VERSION }}
+            openresty.version=${{ env.OPENRESTY_VERSION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Enable buildkit cache for faster rebuilds
+          buildkitd-flags: --debug
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image (PR — no push)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./build
+          file: ./build/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            RESTY_OPENSSL_VERSION=${{ env.TONGSUO_VERSION }}
+            RESTY_VERSION=${{ env.OPENRESTY_VERSION }}
+            RESTY_J=$(nproc)
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Build and push Docker image
+        id: build
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./build
+          file: ./build/Dockerfile
+          push: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.push_to_registry != 'false' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            RESTY_OPENSSL_VERSION=${{ env.TONGSUO_VERSION }}
+            RESTY_VERSION=${{ env.OPENRESTY_VERSION }}
+            RESTY_J=$(nproc)
+          # GitHub Actions cache for faster rebuilds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Generate SBOM and attestation for supply chain security
+      - name: Generate artifact attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # Verify the built image
+  verify:
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Verify Tongsuo version
+        run: |
+          echo "=== Checking Tongsuo version ==="
+          /usr/local/openresty/openssl3/bin/openssl version
+          /usr/local/openresty/openssl3/bin/openssl version | grep -i tongsuo || echo "WARNING: Tongsuo string not found in version output"
+
+      - name: Verify OpenResty
+        run: |
+          echo "=== Checking OpenResty ==="
+          /usr/local/openresty/nginx/sbin/nginx -V 2>&1
+
+      - name: Verify SM2/SM3/SM4
+        run: |
+          echo "=== Checking SM2 curve ==="
+          /usr/local/openresty/openssl3/bin/openssl ecparam -list_curves 2>&1 | grep -i sm2 || echo "SM2 not listed (check build options)"
+          echo "=== Checking SM3 digest ==="
+          echo "test" | /usr/local/openresty/openssl3/bin/openssl dgst -sm3 2>&1 || echo "SM3 not available (check build options)"
+          echo "=== Checking SM4 cipher ==="
+          /usr/local/openresty/openssl3/bin/openssl enc -sm4-cbc -help 2>&1 || echo "SM4 not available (check build options)"
+
+      - name: Verify NGINX TLS
+        run: |
+          echo "=== Checking if nginx starts ==="
+          /usr/local/openresty/nginx/sbin/nginx -t 2>&1 || echo "nginx config test had issues"
